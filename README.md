@@ -8,7 +8,7 @@ The original course project was completed collaboratively by a five-person team 
 
 This repository contains only **my KNN-related contribution** to the project. Other team members developed additional modeling components, which are intentionally not included here.
 
-The course required model development using the training data, with validation or cross-validation used for model selection and the provided test set reserved for final evaluation. :contentReference[oaicite:0]{index=0}
+The course required model development using the training data, with validation or cross-validation used for model selection and the provided test set reserved for final evaluation. 
 
 ## Collaboration
 
