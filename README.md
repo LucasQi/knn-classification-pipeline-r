@@ -39,6 +39,34 @@ My work focused on the K-Nearest Neighbors classification pipeline, including:
 - dplyr
 - tidyverse
 
+## Model Selection
+
+Multiple values of `k` were evaluated using the validation set, with
+balanced accuracy used as the primary selection metric because of class imbalance.
+
+![KNN Validation Performance](docs/images/knn_validation_by_k.png)
+
+The validation results selected **k = 31** for the final KNN model.
+
+## Final Test Performance
+
+The selected model was evaluated once on the held-out test set.
+
+![KNN Test Metrics](docs/images/knn_test_metrics.png)
+
+The model achieved approximately:
+
+- Accuracy: 0.798
+- Sensitivity: 0.607
+- Specificity: 0.822
+- Balanced Accuracy: 0.714
+- F1 Score: 0.403
+- AUC: 0.762
+
+### Confusion Matrix
+
+![KNN Test Confusion Matrix](docs/images/knn_confusion_matrix.png)
+
 ## Repository Structure
 
 ```text
