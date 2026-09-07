@@ -71,21 +71,23 @@ The model achieved approximately:
 
 ```text
 knn-classification-pipeline-r/
-
+│
 ├── README.md
 ├── .gitignore
-├── README.md
-└── docs/images
-    └── knn_confusion_matrix.png
-    └── knn_test_metrics.png
-    └── knn_validation_by_k.png
+├── .gitattributes
 │
-└── data/
-    └── testing_data.csv
-    └── trainning_data.csv
-└── analysis/
-    └── knn_classification.Rmd
-```
+├── analysis/
+│   └── knn_classification.Rmd
+│
+├── data/
+│   ├── training_data.csv
+│   └── testing_data.csv
+│
+└── docs/
+    └── images/
+        ├── knn_validation_by_k.png
+        ├── knn_test_metrics.png
+        └── knn_confusion_matrix.png
 ## Disclaimer
 
 This project was completed for academic and educational purposes.
