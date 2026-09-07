@@ -71,10 +71,18 @@ The model achieved approximately:
 
 ```text
 knn-classification-pipeline-r/
-│
+
 ├── README.md
 ├── .gitignore
+├── README.md
+└── docs/images
+    └── knn_confusion_matrix.png
+    └── knn_test_metrics.png
+    └── knn_validation_by_k.png
 │
+└── data/
+    └── testing_data.csv
+    └── trainning_data.csv
 └── analysis/
     └── knn_classification.Rmd
 ```
