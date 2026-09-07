@@ -1,0 +1,702 @@
+---
+title: "KNN Classification Pipeline"
+subtitle: "AMS 580 Team Project — Individual Contribution"
+author: "Fei Qi"
+date: "2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+# Project Overview
+
+This analysis presents my K-Nearest Neighbors (KNN) contribution to a five-person AMS 580 classification project.
+
+The workflow uses the provided training dataset for model development, creates a separate validation subset for hyperparameter selection, and reserves the provided testing dataset for final evaluation.
+
+Because the response variable is imbalanced, balanced accuracy is used as the primary validation metric. Accuracy, sensitivity, specificity, F1 score, and AUC are also reported.
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(caret)
+library(class)
+library(pROC)
+library(readr)
+```
+
+# Load Data
+
+```{r}
+training_data <- read.csv("../data/training_data.csv")
+testing_data  <- read.csv("../data/testing_data.csv")
+
+dim(training_data)
+dim(testing_data)
+table(training_data$y)
+```
+
+# Train / Validation / Test Design
+
+The provided training dataset is split into model-training and validation subsets. The provided testing dataset is kept separate and is not used to select `k`.
+
+```{r}
+set.seed(123)
+
+train_index <- createDataPartition(
+  training_data$y,
+  p = 0.75,
+  list = FALSE
+)
+
+train_raw <- training_data[train_index, ]
+valid_raw <- training_data[-train_index, ]
+test_raw  <- testing_data
+```
+
+# Preprocessing
+
+The preprocessing workflow removes `duration`, converts `pdays` into a prior-contact indicator, applies log transformations to skewed count variables, converts character variables to factors, standardizes numeric predictors using training-set statistics only, and prepares dummy-variable matrices for KNN.
+
+## Basic Cleaning
+
+```{r}
+basic_clean <- function(df) {
+
+  # Remove duration to avoid using information unavailable before the outcome.
+  if ("duration" %in% names(df)) {
+    df$duration <- NULL
+  }
+
+  # Convert pdays into a binary prior-contact indicator.
+  if ("pdays" %in% names(df)) {
+    df$pdays_contacted_before <- ifelse(df$pdays == 999, "no", "yes")
+    df$pdays_contacted_before <- factor(df$pdays_contacted_before)
+    df$pdays <- NULL
+  }
+
+  # Log-transform skewed count variables.
+  if ("campaign" %in% names(df)) {
+    df$campaign <- log1p(df$campaign)
+  }
+
+  if ("previous" %in% names(df)) {
+    df$previous <- log1p(df$previous)
+  }
+
+  # Convert character variables to factors.
+  df <- df %>%
+    mutate(across(where(is.character), as.factor))
+
+  # Standardize response levels.
+  df$y <- factor(df$y, levels = c("no", "yes"))
+
+  df
+}
+
+train_clean <- basic_clean(train_raw)
+valid_clean <- basic_clean(valid_raw)
+test_clean  <- basic_clean(test_raw)
+```
+
+## Match Factor Levels
+
+Validation and test categorical variables are aligned to the factor levels learned from the training subset.
+
+```{r}
+factor_cols <- names(train_clean)[sapply(train_clean, is.factor)]
+factor_cols <- setdiff(factor_cols, "y")
+
+for (col in factor_cols) {
+  train_levels <- levels(train_clean[[col]])
+
+  valid_clean[[col]] <- factor(
+    valid_clean[[col]],
+    levels = train_levels
+  )
+
+  test_clean[[col]] <- factor(
+    test_clean[[col]],
+    levels = train_levels
+  )
+}
+```
+
+## Standardize Numeric Predictors
+
+Numeric means and standard deviations are estimated from the training subset only and then applied to validation and test data.
+
+```{r}
+numeric_cols <- names(train_clean)[sapply(train_clean, is.numeric)]
+
+train_means <- sapply(
+  train_clean[numeric_cols],
+  mean,
+  na.rm = TRUE
+)
+
+train_sds <- sapply(
+  train_clean[numeric_cols],
+  sd,
+  na.rm = TRUE
+)
+
+# Avoid division by zero for constant predictors.
+train_sds[train_sds == 0] <- 1
+
+for (col in numeric_cols) {
+  train_clean[[col]] <- (
+    train_clean[[col]] - train_means[col]
+  ) / train_sds[col]
+
+  valid_clean[[col]] <- (
+    valid_clean[[col]] - train_means[col]
+  ) / train_sds[col]
+
+  test_clean[[col]] <- (
+    test_clean[[col]] - train_means[col]
+  ) / train_sds[col]
+}
+```
+
+# Feature Preparation for KNN
+
+## Dummy Encoding
+
+```{r}
+x_train <- model.matrix(
+  y ~ .,
+  data = train_clean
+)[, -1, drop = FALSE]
+
+x_valid <- model.matrix(
+  y ~ .,
+  data = valid_clean
+)[, -1, drop = FALSE]
+
+x_test <- model.matrix(
+  y ~ .,
+  data = test_clean
+)[, -1, drop = FALSE]
+
+x_train <- as.data.frame(x_train)
+x_valid <- as.data.frame(x_valid)
+x_test  <- as.data.frame(x_test)
+
+colnames(x_train) <- make.names(
+  colnames(x_train),
+  unique = TRUE
+)
+
+colnames(x_valid) <- make.names(
+  colnames(x_valid),
+  unique = TRUE
+)
+
+colnames(x_test) <- make.names(
+  colnames(x_test),
+  unique = TRUE
+)
+```
+
+## Align Predictor Columns
+
+```{r}
+missing_valid <- setdiff(
+  colnames(x_train),
+  colnames(x_valid)
+)
+
+for (col in missing_valid) {
+  x_valid[[col]] <- 0
+}
+
+missing_test <- setdiff(
+  colnames(x_train),
+  colnames(x_test)
+)
+
+for (col in missing_test) {
+  x_test[[col]] <- 0
+}
+
+x_valid <- x_valid[
+  ,
+  colnames(x_train),
+  drop = FALSE
+]
+
+x_test <- x_test[
+  ,
+  colnames(x_train),
+  drop = FALSE
+]
+
+y_train <- factor(
+  train_clean$y,
+  levels = c("no", "yes")
+)
+
+y_valid <- factor(
+  valid_clean$y,
+  levels = c("no", "yes")
+)
+
+y_test <- factor(
+  test_clean$y,
+  levels = c("no", "yes")
+)
+```
+
+## Remove Near-Zero-Variance Predictors
+
+```{r}
+nzv <- nearZeroVar(x_train)
+
+if (length(nzv) > 0) {
+  x_train <- x_train[
+    ,
+    -nzv,
+    drop = FALSE
+  ]
+
+  x_valid <- x_valid[
+    ,
+    -nzv,
+    drop = FALSE
+  ]
+
+  x_test <- x_test[
+    ,
+    -nzv,
+    drop = FALSE
+  ]
+}
+```
+
+# Class Imbalance Handling
+
+The majority class is undersampled in the model-training subset so that KNN is trained on a balanced sample.
+
+```{r}
+train_knn_full <- data.frame(
+  y = y_train,
+  x_train
+)
+
+train_yes <- train_knn_full[
+  train_knn_full$y == "yes",
+]
+
+train_no <- train_knn_full[
+  train_knn_full$y == "no",
+]
+
+n_yes <- nrow(train_yes)
+
+set.seed(123)
+
+train_no_sample <- train_no[
+  sample(
+    seq_len(nrow(train_no)),
+    n_yes
+  ),
+]
+
+train_knn_balanced <- rbind(
+  train_yes,
+  train_no_sample
+)
+
+train_knn_balanced <- train_knn_balanced[
+  sample(
+    seq_len(nrow(train_knn_balanced))
+  ),
+]
+
+x_train_knn <- as.matrix(
+  train_knn_balanced[, -1]
+)
+
+y_train_knn <- factor(
+  train_knn_balanced$y,
+  levels = c("no", "yes")
+)
+
+x_valid_knn <- as.matrix(x_valid)
+x_test_knn  <- as.matrix(x_test)
+
+table(y_train_knn)
+```
+
+# KNN Evaluation Function
+
+```{r}
+evaluate_knn <- function(
+  x_eval,
+  y_eval,
+  dataset_name,
+  k_val
+) {
+
+  pred_raw <- knn(
+    train = x_train_knn,
+    test = x_eval,
+    cl = y_train_knn,
+    k = k_val,
+    prob = TRUE
+  )
+
+  vote_prob <- attr(
+    pred_raw,
+    "prob"
+  )
+
+  pred <- factor(
+    as.character(pred_raw),
+    levels = c("no", "yes")
+  )
+
+  y_eval <- factor(
+    y_eval,
+    levels = c("no", "yes")
+  )
+
+  # class::knn returns the vote proportion for the predicted class.
+  # Convert it into a score for the positive ("yes") class.
+  yes_prob <- ifelse(
+    pred == "yes",
+    vote_prob,
+    1 - vote_prob
+  )
+
+  cm <- confusionMatrix(
+    pred,
+    y_eval,
+    positive = "yes"
+  )
+
+  auc_value <- pROC::auc(
+    pROC::roc(
+      response = y_eval,
+      predictor = yes_prob,
+      levels = c("no", "yes"),
+      quiet = TRUE
+    )
+  )
+
+  data.frame(
+    Dataset = dataset_name,
+    k = k_val,
+    Bal_Acc = as.numeric(
+      cm$byClass["Balanced Accuracy"]
+    ),
+    AUC = as.numeric(auc_value),
+    F1 = as.numeric(
+      cm$byClass["F1"]
+    ),
+    Sens = as.numeric(
+      cm$byClass["Sensitivity"]
+    ),
+    Spec = as.numeric(
+      cm$byClass["Specificity"]
+    ),
+    Acc = as.numeric(
+      cm$overall["Accuracy"]
+    )
+  )
+}
+```
+
+# Model Selection
+
+Multiple values of `k` are evaluated on the validation subset only. The value with the highest balanced accuracy is selected for the final model.
+
+```{r}
+k_values <- c(
+  5,
+  11,
+  21,
+  31,
+  41
+)
+
+knn_valid_results <- map_df(
+  k_values,
+  function(k_val) {
+    evaluate_knn(
+      x_eval = x_valid_knn,
+      y_eval = y_valid,
+      dataset_name = "Validation",
+      k_val = k_val
+    )
+  }
+)
+
+knn_valid_results <- knn_valid_results %>%
+  arrange(desc(Bal_Acc))
+
+knn_valid_results
+
+best_k <- knn_valid_results %>%
+  slice(1) %>%
+  pull(k)
+
+best_k
+```
+
+# Final Held-Out Test Evaluation
+
+The selected value of `k` is evaluated once on the provided held-out test dataset.
+
+```{r}
+knn_final_results <- bind_rows(
+  evaluate_knn(
+    x_valid_knn,
+    y_valid,
+    "Validation",
+    best_k
+  ),
+  evaluate_knn(
+    x_test_knn,
+    y_test,
+    "Test",
+    best_k
+  )
+)
+
+knn_final_results
+```
+
+## Final Test Predictions
+
+```{r}
+knn_test_pred_raw <- knn(
+  train = x_train_knn,
+  test = x_test_knn,
+  cl = y_train_knn,
+  k = best_k,
+  prob = TRUE
+)
+
+knn_test_pred <- factor(
+  as.character(knn_test_pred_raw),
+  levels = c("no", "yes")
+)
+
+knn_test_cm <- confusionMatrix(
+  knn_test_pred,
+  y_test,
+  positive = "yes"
+)
+
+knn_test_cm
+```
+
+# Visualizations
+
+Create the output directory if it does not already exist.
+
+```{r}
+dir.create(
+  "../docs/images",
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+```
+
+## Validation Performance by k
+
+```{r}
+p_k <- ggplot(
+  knn_valid_results,
+  aes(
+    x = k,
+    y = Bal_Acc
+  )
+) +
+  geom_line() +
+  geom_point(size = 3) +
+  geom_vline(
+    xintercept = best_k,
+    linetype = "dashed"
+  ) +
+  annotate(
+    "text",
+    x = best_k,
+    y = max(knn_valid_results$Bal_Acc),
+    label = paste0(
+      "Selected k = ",
+      best_k
+    ),
+    vjust = -1,
+    hjust = 0.5
+  ) +
+  labs(
+    title = "KNN Validation Performance by k",
+    x = "Number of Neighbors (k)",
+    y = "Balanced Accuracy"
+  ) +
+  theme_minimal()
+
+p_k
+
+ggsave(
+  "../docs/images/knn_validation_by_k.png",
+  plot = p_k,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+```
+
+## Final Test Metrics
+
+```{r}
+test_metrics <- knn_final_results %>%
+  filter(Dataset == "Test") %>%
+  select(
+    Acc,
+    Sens,
+    Spec,
+    Bal_Acc,
+    F1,
+    AUC
+  ) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
+test_metrics$Metric <- factor(
+  test_metrics$Metric,
+  levels = c(
+    "Acc",
+    "Sens",
+    "Spec",
+    "Bal_Acc",
+    "F1",
+    "AUC"
+  ),
+  labels = c(
+    "Accuracy",
+    "Sensitivity",
+    "Specificity",
+    "Balanced Accuracy",
+    "F1 Score",
+    "AUC"
+  )
+)
+
+p_metrics <- ggplot(
+  test_metrics,
+  aes(
+    x = Metric,
+    y = Value
+  )
+) +
+  geom_col() +
+  geom_text(
+    aes(
+      label = sprintf(
+        "%.3f",
+        Value
+      )
+    ),
+    vjust = -0.4
+  ) +
+  coord_cartesian(
+    ylim = c(0, 1)
+  ) +
+  labs(
+    title = paste0(
+      "Final KNN Test Performance (k = ",
+      best_k,
+      ")"
+    ),
+    x = NULL,
+    y = "Score"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 35,
+      hjust = 1
+    )
+  )
+
+p_metrics
+
+ggsave(
+  "../docs/images/knn_test_metrics.png",
+  plot = p_metrics,
+  width = 9,
+  height = 5,
+  dpi = 300
+)
+```
+
+## Confusion Matrix Heatmap
+
+```{r}
+cm_table <- table(
+  Actual = y_test,
+  Predicted = knn_test_pred
+)
+
+cm_df <- as.data.frame(
+  cm_table
+)
+
+p_cm <- ggplot(
+  cm_df,
+  aes(
+    x = Predicted,
+    y = Actual,
+    fill = Freq
+  )
+) +
+  geom_tile() +
+  geom_text(
+    aes(label = Freq),
+    size = 6
+  ) +
+  guides(fill = "none") +
+  labs(
+    title = paste0(
+      "Held-Out Test Confusion Matrix (k = ",
+      best_k,
+      ")"
+    ),
+    x = "Predicted Class",
+    y = "Actual Class"
+  ) +
+  theme_minimal()
+
+p_cm
+
+ggsave(
+  "../docs/images/knn_confusion_matrix.png",
+  plot = p_cm,
+  width = 6,
+  height = 5,
+  dpi = 300
+)
+```
+
+# Conclusion
+
+This pipeline keeps model selection and final evaluation separate: `k` is selected using validation balanced accuracy, and the selected KNN model is then evaluated on the held-out test dataset.
+
+The workflow also standardizes numeric predictors using training-set statistics only, aligns encoded predictors across datasets, removes near-zero-variance features, and balances the model-training subset before fitting KNN.
