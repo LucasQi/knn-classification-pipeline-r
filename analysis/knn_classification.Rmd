@@ -35,6 +35,7 @@ bank_1 <- read.csv("../data/testing_data.csv")
 
 ## Split the training and testing dataset
 ```{r}
+set.seed(123)
 train_index <- createDataPartition(bank$y, p = 0.75, list = FALSE)
 training.samples <- bank$y %>% createDataPartition(p = 0.80, list = FALSE)
 train  <- bank[training.samples, ]
