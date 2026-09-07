@@ -77,7 +77,7 @@ knn-classification-pipeline-r/
 ├── .gitattributes
 │
 ├── analysis/
-│   └── analysis/knn_classification_cleaned.Rmd
+│   └── analysis/knn_classification.Rmd
 │
 ├── data/
 │   ├── training_data.csv
