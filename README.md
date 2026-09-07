@@ -88,6 +88,7 @@ knn-classification-pipeline-r/
         ├── knn_validation_by_k.png
         ├── knn_test_metrics.png
         └── knn_confusion_matrix.png
+```
 ## Disclaimer
 
 This project was completed for academic and educational purposes.
